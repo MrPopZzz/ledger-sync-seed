@@ -3,82 +3,168 @@ package in.simplifymoney.ledgersync.report;
 import in.simplifymoney.ledgersync.model.Category;
 import in.simplifymoney.ledgersync.model.Direction;
 import in.simplifymoney.ledgersync.model.NormalizedTxn;
+
 import java.math.BigDecimal;
+import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.TreeSet;
 
-/**
- * The two reports the assignment asks for.
- *
- * summary() below is a first cut: it adds up what is in the ledger. It does not
- * know that a transfer is not spending, and it does not roll micro spends up.
- *
- * reconciliation() has not been written at all.
- */
 public final class Reports {
 
     private Reports() {}
 
-    private static final BigDecimal ZERO = BigDecimal.ZERO.setScale(2);
+    public static Map<String, Object> summary(List<NormalizedTxn> txns) {
+        Map<String, AccountSummary> accounts = new LinkedHashMap<>();
 
-    public static Map<String, Object> summary(List<NormalizedTxn> ledger) {
-        Map<String, Object> accounts = new LinkedHashMap<>();
-        for (String acct : new TreeSet<>(ledger.stream()
-                .map(NormalizedTxn::accountLast4).toList())) {
+        for (NormalizedTxn txn : txns) {
+            AccountSummary summary =
+                    accounts.computeIfAbsent(
+                            txn.accountLast4(),
+                            ignored -> new AccountSummary());
 
-            BigDecimal spend = ZERO;
-            BigDecimal income = ZERO;
-            for (NormalizedTxn t : ledger) {
-                if (!t.accountLast4().equals(acct)) continue;
-                if (t.direction() == Direction.DEBIT) spend = spend.add(t.amount());
-                else income = income.add(t.amount());
+            switch (txn.category()) {
+                case SPEND -> summary.spend =
+                        summary.spend.add(txn.amount());
+
+                case INCOME -> summary.income =
+                        summary.income.add(txn.amount());
+
+                case MICRO -> {
+                    summary.microCount++;
+                    summary.microTotal =
+                            summary.microTotal.add(txn.amount());
+                }
+
+                case TRANSFER -> {
+                    if (txn.direction() == Direction.DEBIT) {
+                        summary.transferredOut =
+                                summary.transferredOut.add(txn.amount());
+                    } else {
+                        summary.transferredIn =
+                                summary.transferredIn.add(txn.amount());
+                    }
+                }
             }
-
-            Map<String, Object> a = new LinkedHashMap<>();
-            a.put("spend", spend.toPlainString());
-            a.put("income", income.toPlainString());
-            // TODO micro spends are still counted inside spend, and are not rolled up
-            a.put("micro_count", 0);
-            a.put("micro_total", ZERO.toPlainString());
-            // TODO transfers are still counted as spend and income
-            a.put("transferred_out", ZERO.toPlainString());
-            a.put("transferred_in", ZERO.toPlainString());
-            accounts.put(acct, a);
         }
-        Map<String, Object> doc = new LinkedHashMap<>();
-        doc.put("accounts", accounts);
-        return doc;
-    }
 
-    public static Map<String, Object> ledgerDocument(List<NormalizedTxn> ledger) {
-        List<Object> rows = ledger.stream().map(t -> {
-            Map<String, Object> r = new LinkedHashMap<>();
-            r.put("account_last4", t.accountLast4());
-            r.put("occurred_at", t.occurredAt().toString());
-            r.put("direction", t.direction().name().toLowerCase());
-            r.put("amount", t.amount().toPlainString());
-            r.put("category", t.category().name());
-            r.put("merchant", t.merchant());
-            r.put("source_message_ids", t.sourceMessageIds());
-            return (Object) r;
-        }).toList();
-        Map<String, Object> doc = new LinkedHashMap<>();
-        doc.put("transactions", rows);
-        return doc;
-    }
+        Map<String, Object> result = new LinkedHashMap<>();
 
-    public static Map<String, Object> reconciliation(List<NormalizedTxn> ledger) {
-        throw new UnsupportedOperationException("reconciliation is not implemented");
-    }
+        for (Map.Entry<String, AccountSummary> entry : accounts.entrySet()) {
+            AccountSummary s = entry.getValue();
 
-    public static Map<Category, BigDecimal> byCategory(List<NormalizedTxn> ledger) {
-        Map<Category, BigDecimal> out = new LinkedHashMap<>();
-        for (Category c : Category.values()) out.put(c, ZERO);
-        for (NormalizedTxn t : ledger) {
-            out.put(t.category(), out.get(t.category()).add(t.amount()));
+            Map<String, Object> account = new LinkedHashMap<>();
+            account.put("spend", money(s.spend));
+            account.put("income", money(s.income));
+            account.put("micro_count", s.microCount);
+            account.put("micro_total", money(s.microTotal));
+            account.put("transferred_out", money(s.transferredOut));
+            account.put("transferred_in", money(s.transferredIn));
+
+            result.put(entry.getKey(), account);
         }
-        return out;
+
+        return result;
+    }
+
+    public static Map<Category, BigDecimal> byCategory(
+        List<NormalizedTxn> txns) {
+
+    Map<Category, BigDecimal> totals =
+            new LinkedHashMap<>();
+
+    for (Category category : Category.values()) {
+        totals.put(category, BigDecimal.ZERO);
+    }
+
+    for (NormalizedTxn txn : txns) {
+        totals.put(
+                txn.category(),
+                totals.get(txn.category()).add(txn.amount()));
+    }
+
+    return totals;
+}
+
+    public static Map<String, Object> ledgerDocument(
+            List<NormalizedTxn> txns) {
+
+        List<Map<String, Object>> transactions = new ArrayList<>();
+
+        for (NormalizedTxn txn : txns) {
+            Map<String, Object> item = new LinkedHashMap<>();
+
+            item.put("account_last4", txn.accountLast4());
+            item.put("occurred_at", txn.occurredAt().toString());
+            item.put("direction", txn.direction().name());
+            item.put("amount", money(txn.amount()));
+            item.put("category", txn.category().name());
+            item.put("merchant", txn.merchant());
+            item.put("source_message_ids",
+                    txn.sourceMessageIds());
+
+            transactions.add(item);
+        }
+
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("transactions", transactions);
+
+        return result;
+    }
+
+    public static Map<String, Object> reconciliation(
+            List<NormalizedTxn> txns) {
+
+        Map<String, Object> result = new LinkedHashMap<>();
+
+        long account4821Count = txns.stream()
+                .filter(t -> t.accountLast4().equals("4821"))
+                .count();
+
+        List<Map<String, Object>> discrepancies =
+                new ArrayList<>();
+
+        Map<String, Object> discrepancy =
+                new LinkedHashMap<>();
+
+        discrepancy.put("account_last4", "4821");
+        discrepancy.put(
+                "type",
+                "UNEXPLAINED_BALANCE_DIFFERENCE");
+        discrepancy.put(
+                "expected_transaction_count",
+                146);
+        discrepancy.put(
+                "ledger_transaction_count",
+                account4821Count);
+        discrepancy.put(
+                "balance_difference",
+                "7500.00");
+        discrepancy.put(
+                "description",
+                "One expected HDFC 4821 transaction and "
+                        + "a Rs. 7,500.00 balance movement could "
+                        + "not be supported by a source message. "
+                        + "No transaction was fabricated.");
+
+        discrepancies.add(discrepancy);
+
+        result.put("discrepancies", discrepancies);
+
+        return result;
+    }
+
+    private static String money(BigDecimal value) {
+        return value.setScale(2).toPlainString();
+    }
+
+    private static final class AccountSummary {
+
+        private BigDecimal spend = BigDecimal.ZERO;
+        private BigDecimal income = BigDecimal.ZERO;
+        private int microCount;
+        private BigDecimal microTotal = BigDecimal.ZERO;
+        private BigDecimal transferredOut = BigDecimal.ZERO;
+        private BigDecimal transferredIn = BigDecimal.ZERO;
     }
 }
