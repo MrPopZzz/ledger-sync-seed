@@ -35,6 +35,20 @@ public final class SelfCheck {
         System.out.printf("  messages skipped    %d%n", stats.messagesSkipped());
 
         List<NormalizedTxn> ledger = store.all();
+
+        // System.out.println("\nNORMALIZED SAVINGS TRANSACTIONS");
+        // ledger.stream()
+        //         .filter(t -> t.accountLast4().equals("4821") || t.accountLast4().equals("9075"))
+        //         .sorted(java.util.Comparator.comparing(NormalizedTxn::occurredAt))
+        //         .forEach(t -> System.out.printf(
+        //                 "%s | %s | %s | %s | %s | %s%n",
+        //                 t.accountLast4(),
+        //                 t.occurredAt(),
+        //                 t.direction(),
+        //                 t.amount(),
+        //                 t.merchant(),
+        //                 t.sourceMessageIds()));
+
         Map<Category, BigDecimal> cats = in.simplifymoney.ledgersync.report.Reports
                 .byCategory(ledger);
         System.out.println("\nBY CATEGORY");

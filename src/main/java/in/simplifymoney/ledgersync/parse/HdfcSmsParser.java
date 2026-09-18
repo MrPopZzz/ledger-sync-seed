@@ -23,19 +23,25 @@ public final class HdfcSmsParser implements MessageParser {
     public static final String SENDER = "AD-HDFCBK-S";
 
     private static final Pattern V1 = Pattern.compile(
-            "(?<dir>debited from|credited to) a/c \\*\\*(?<acct>\\d{4}) "
+            "(?:Rs\\.?|INR)\\s*(?<amount>[0-9,]+(?:\\.[0-9]{1,2})?)\\s+"
+                    + "(?<dir>debited from|credited to) a/c \\*\\*(?<acct>\\d{4}) "
                     + "on (?<when>\\d{2}-\\d{2}-\\d{2} at \\d{2}:\\d{2}) "
-                    + "(?:to|by) (?<merchant>[^.]+)\\.");
+                    + "(?:to|by) (?<merchant>[^.]+)\\.",
+            Pattern.CASE_INSENSITIVE);
 
     private static final Pattern V2 = Pattern.compile(
-            "^(?<dir>Sent|Received) .*?\\n(?:To|From): (?<merchant>.+?)\\n"
+            "^(?<dir>Sent|Received)\\s+(?:INR|Rs\\.?)\\s*"
+                    + "(?<amount>[0-9,]+(?:\\.[0-9]{1,2})?).*?\\n"
+                    + "(?:To|From): (?<merchant>.+?)\\n"
                     + "On: (?<when>\\d{2} \\w{3} \\d{2} \\d{2}:\\d{2})\\n"
                     + "A/c: XX(?<acct>\\d{4})",
-            Pattern.DOTALL);
+            Pattern.DOTALL | Pattern.CASE_INSENSITIVE);
 
     private static final Pattern CARD = Pattern.compile(
-            "spent on HDFC Bank Card x(?<acct>\\d{4}) at (?<merchant>.+?) "
-                    + "on (?<when>\\d{2}-\\d{2}-\\d{2} \\d{2}:\\d{2})\\.");
+            "(?:Rs\\.?|INR)\\s*(?<amount>[0-9,]+(?:\\.[0-9]{1,2})?)\\s+"
+                    + "spent on HDFC Bank Card x(?<acct>\\d{4}) at (?<merchant>.+?) "
+                    + "on (?<when>\\d{2}-\\d{2}-\\d{2} \\d{2}:\\d{2})\\.",
+            Pattern.CASE_INSENSITIVE);
 
     @Override
     public boolean supports(RawMessage m) {
@@ -51,30 +57,31 @@ public final class HdfcSmsParser implements MessageParser {
             Direction d = v1.group("dir").startsWith("debited")
                     ? Direction.DEBIT : Direction.CREDIT;
             return build(m, v1.group("acct"), v1.group("when").replace(" at ", " "),
-                    d, v1.group("merchant"));
+                    d, v1.group("merchant"), v1.group("amount"));
         }
 
         Matcher v2 = V2.matcher(body);
         if (v2.find()) {
             Direction d = "Sent".equals(v2.group("dir"))
                     ? Direction.DEBIT : Direction.CREDIT;
-            return build(m, v2.group("acct"), v2.group("when"), d, v2.group("merchant"));
+            return build(m, v2.group("acct"), v2.group("when"), d, v2.group("merchant"),
+                    v2.group("amount"));
         }
 
         Matcher card = CARD.matcher(body);
         if (card.find()) {
             return build(m, card.group("acct"), card.group("when"),
-                    Direction.DEBIT, card.group("merchant"));
+                    Direction.DEBIT, card.group("merchant"), card.group("amount"));
         }
 
         return Optional.empty();
     }
 
     private Optional<ParsedTxn> build(RawMessage m, String acct, String when,
-                                      Direction dir, String merchant) {
-        BigDecimal amount = Amounts.first(m.body());
+                                      Direction dir, String merchant, String amountText) {
+        BigDecimal amount = new BigDecimal(amountText.replace(",", "")).setScale(2);
         OffsetDateTime at = Dates.ist(when);
-        if (amount == null || at == null) return Optional.empty();
+        if (at == null) return Optional.empty();
         return Optional.of(new ParsedTxn(acct, at, dir, amount, merchant.trim(),
                 Amounts.statedBalance(m.body()), m.messageId()));
     }
