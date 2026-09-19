@@ -8,3 +8,12 @@ submission/
 .idea/
 *.iml
 .DS_Store
+
+# Generated reports
+fixtures/ledger.json
+fixtures/summary.json
+fixtures/reconciliation.json
+
+# JVM crash/debug logs
+hs_err_pid*.log
+replay_pid*.log
